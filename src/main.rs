@@ -197,6 +197,9 @@ fn main() {
     match args.first().map(String::as_str) {
         Some("manifest") => println!("{}", manifest()),
         Some("sidecar") => { let _ = sidecar(); }
+        Some("-h" | "--help" | "help") => {
+            println!("db — SQLite tools (db_query, db_tables, db_schema)");
+        }
         _ => {
             if args.is_empty() {
                 if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
