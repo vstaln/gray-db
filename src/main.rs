@@ -100,12 +100,31 @@ fn db_query(args: &Value) -> Result<String, String> {
             })
         };
     }
-    for stmt_sql in split_statements(sql) {
-        stmt_no += 1;
-        let mut stmt = match conn.prepare(&stmt_sql) {
-            Ok(s) => s,
-            Err(e) => fail!(format!("prepare stmt {stmt_no}: {e}")),
+    let mut segs = split_statements(sql).into_iter();
+    while let Some(seg) = segs.next() {
+        let mut stmt_sql = seg;
+        // `;` inside CREATE TRIGGER … BEGIN…END (and friends) splits the
+        // statement falsely; SQLite's "incomplete input" means keep going.
+        let mut stmt = loop {
+            match conn.prepare(&stmt_sql) {
+                Ok(s) => break s,
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg.contains("incomplete input") {
+                        match segs.next() {
+                            Some(next) => {
+                                stmt_sql.push(';');
+                                stmt_sql.push_str(&next);
+                                continue;
+                            }
+                            None => fail!(format!("prepare stmt {}: {msg}", stmt_no + 1)),
+                        }
+                    }
+                    fail!(format!("prepare stmt {}: {msg}", stmt_no + 1));
+                }
+            }
         };
+        stmt_no += 1;
         let ncols = stmt.column_count();
         if ncols == 0 {
             let n = match stmt.execute([]) {
