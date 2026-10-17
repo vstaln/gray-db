@@ -74,6 +74,11 @@ fn open(path: &str) -> Result<Connection, String> {
     Connection::open(path).map_err(|e| format!("open {path}: {e}"))
 }
 
+fn open_read(path: &str) -> Result<Connection, String> {
+    Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| format!("open {path}: {e}"))
+}
+
 fn db_query(args: &Value) -> Result<String, String> {
     let path = args["path"].as_str().ok_or("path required")?;
     let sql = args["sql"].as_str().ok_or("sql required")?;
@@ -117,11 +122,15 @@ fn db_query(args: &Value) -> Result<String, String> {
             out.push_str(&format!("\n({n} rows)\n"));
         }
     }
-    Ok(out.trim_end().to_string())
+    Ok(if out.trim().is_empty() {
+        "(no statements)".to_string()
+    } else {
+        out.trim_end().to_string()
+    })
 }
 
 fn db_tables(args: &Value) -> Result<String, String> {
-    let conn = open(args["path"].as_str().ok_or("path required")?)?;
+    let conn = open_read(args["path"].as_str().ok_or("path required")?)?;
     let mut stmt = conn.prepare(
         "SELECT name FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY name")
         .map_err(|e| e.to_string())?;
@@ -131,7 +140,7 @@ fn db_tables(args: &Value) -> Result<String, String> {
 }
 
 fn db_schema(args: &Value) -> Result<String, String> {
-    let conn = open(args["path"].as_str().ok_or("path required")?)?;
+    let conn = open_read(args["path"].as_str().ok_or("path required")?)?;
     let (sql, val) = if let Some(t) = args["table"].as_str() {
         ("SELECT sql FROM sqlite_master WHERE name = ?1", Some(t.to_string()))
     } else {
