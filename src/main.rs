@@ -89,24 +89,49 @@ fn db_query(args: &Value) -> Result<String, String> {
     // result-producing statement's rows go to the reply.
     let mut out = String::new();
     let mut stmt_no = 0usize;
+    // A failed script can leave earlier statements applied; the error must
+    // carry their output so a partial commit is never silent.
+    macro_rules! fail {
+        ($e:expr) => {
+            return Err(if out.trim().is_empty() {
+                $e
+            } else {
+                format!("{}\nerror: {}", out.trim_end(), $e)
+            })
+        };
+    }
     for stmt_sql in split_statements(sql) {
-        let mut stmt = conn.prepare(&stmt_sql)
-            .map_err(|e| format!("prepare stmt {}: {e}", stmt_no + 1))?;
         stmt_no += 1;
+        let mut stmt = match conn.prepare(&stmt_sql) {
+            Ok(s) => s,
+            Err(e) => fail!(format!("prepare stmt {stmt_no}: {e}")),
+        };
         let ncols = stmt.column_count();
         if ncols == 0 {
-            let n = stmt.execute([]).map_err(|e| format!("stmt {stmt_no}: {e}"))?;
+            let n = match stmt.execute([]) {
+                Ok(n) => n,
+                Err(e) => fail!(format!("stmt {stmt_no}: {e}")),
+            };
             out.push_str(&format!("ok — {n} rows affected\n"));
         } else {
             let headers: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
             out.push_str(&headers.join(" | "));
-            let mut rows = stmt.query([]).map_err(|e| format!("query: {e}"))?;
+            let mut rows = match stmt.query([]) {
+                Ok(r) => r,
+                Err(e) => fail!(format!("query stmt {stmt_no}: {e}")),
+            };
             let mut n = 0usize;
-            while let Some(row) = rows.next().map_err(|e| format!("row: {e}"))? {
+            while let Some(row) = match rows.next() {
+                Ok(r) => r,
+                Err(e) => fail!(format!("row stmt {stmt_no}: {e}")),
+            } {
                 if n >= cap { out.push_str(&format!("\n… ({cap}-row cap)")); break; }
                 let mut cells = Vec::with_capacity(ncols);
                 for i in 0..ncols {
-                    let v = row.get_ref(i).map_err(|e| e.to_string())?;
+                    let v = match row.get_ref(i) {
+                        Ok(v) => v,
+                        Err(e) => fail!(format!("row stmt {stmt_no}: {e}")),
+                    };
                     cells.push(match v {
                         rusqlite::types::ValueRef::Null => "".into(),
                         rusqlite::types::ValueRef::Integer(i) => i.to_string(),
