@@ -12,15 +12,15 @@ fn manifest() -> Value {
         "name": NAME, "display_name": "DB",
         "version": env!("CARGO_PKG_VERSION"), "protocol": "1.1",
         "tools": [
-            {"name": "db_query", "description": "Run SQL against a SQLite file. SELECT returns a pipe table (capped at 200 rows); writes return rows affected.",
+            {"name": "db_query", "label": "Query", "preview": "{path}\n{sql|firstline}", "description": "Run SQL against a SQLite file. SELECT returns a pipe table (capped at 200 rows); writes return rows affected.",
              "parameters": {"type": "object", "properties": {
                 "path": {"type": "string", "description": "SQLite file path."},
                 "sql": {"type": "string"},
                 "max_rows": {"type": "integer"}}, "required": ["path","sql"]}},
-            {"name": "db_tables", "description": "List tables in a SQLite file.",
+            {"name": "db_tables", "label": "Tables", "preview": "{path}", "description": "List tables in a SQLite file.",
              "parameters": {"type": "object", "properties": {
                 "path": {"type": "string"}}, "required": ["path"]}},
-            {"name": "db_schema", "description": "Show CREATE SQL for one table or all.",
+            {"name": "db_schema", "label": "Schema", "preview": "{table} · {path}", "description": "Show CREATE SQL for one table or all.",
              "parameters": {"type": "object", "properties": {
                 "path": {"type": "string"}, "table": {"type": "string"}},
              "required": ["path"]}},
