@@ -26,6 +26,7 @@ fn manifest() -> Value {
              "required": ["path"]}},
         ],
         "commands": ["/db"], "subcommands": ["db"],
+        "command_descriptions": {"/db": "query SQLite files"},
     })
 }
 
