@@ -12,20 +12,21 @@ fn manifest() -> Value {
         "name": NAME, "display_name": "DB",
         "version": env!("CARGO_PKG_VERSION"), "protocol": "1.1",
         "tools": [
-            {"name": "db_query", "description": "Run SQL against a SQLite file. SELECT returns a pipe table (capped at 200 rows); writes return rows affected.",
+            {"name": "db_query", "label": "Query", "preview": "{path}\n{sql|firstline}", "description": "Run SQL against a SQLite file. SELECT returns a pipe table (capped at 200 rows); writes return rows affected.",
              "parameters": {"type": "object", "properties": {
                 "path": {"type": "string", "description": "SQLite file path."},
                 "sql": {"type": "string"},
                 "max_rows": {"type": "integer"}}, "required": ["path","sql"]}},
-            {"name": "db_tables", "description": "List tables in a SQLite file.",
+            {"name": "db_tables", "label": "Tables", "preview": "{path}", "description": "List tables in a SQLite file.",
              "parameters": {"type": "object", "properties": {
                 "path": {"type": "string"}}, "required": ["path"]}},
-            {"name": "db_schema", "description": "Show CREATE SQL for one table or all.",
+            {"name": "db_schema", "label": "Schema", "preview": "{table} · {path}", "description": "Show CREATE SQL for one table or all.",
              "parameters": {"type": "object", "properties": {
                 "path": {"type": "string"}, "table": {"type": "string"}},
              "required": ["path"]}},
         ],
         "commands": ["/db"], "subcommands": ["db"],
+        "command_descriptions": {"/db": "query SQLite files"},
     })
 }
 
@@ -74,6 +75,11 @@ fn open(path: &str) -> Result<Connection, String> {
     Connection::open(path).map_err(|e| format!("open {path}: {e}"))
 }
 
+fn open_read(path: &str) -> Result<Connection, String> {
+    Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| format!("open {path}: {e}"))
+}
+
 fn db_query(args: &Value) -> Result<String, String> {
     let path = args["path"].as_str().ok_or("path required")?;
     let sql = args["sql"].as_str().ok_or("sql required")?;
@@ -84,24 +90,68 @@ fn db_query(args: &Value) -> Result<String, String> {
     // result-producing statement's rows go to the reply.
     let mut out = String::new();
     let mut stmt_no = 0usize;
-    for stmt_sql in split_statements(sql) {
-        let mut stmt = conn.prepare(&stmt_sql)
-            .map_err(|e| format!("prepare stmt {}: {e}", stmt_no + 1))?;
+    // A failed script can leave earlier statements applied; the error must
+    // carry their output so a partial commit is never silent.
+    macro_rules! fail {
+        ($e:expr) => {
+            return Err(if out.trim().is_empty() {
+                $e
+            } else {
+                format!("{}\nerror: {}", out.trim_end(), $e)
+            })
+        };
+    }
+    let mut segs = split_statements(sql).into_iter();
+    while let Some(seg) = segs.next() {
+        let mut stmt_sql = seg;
+        // `;` inside CREATE TRIGGER … BEGIN…END (and friends) splits the
+        // statement falsely; SQLite's "incomplete input" means keep going.
+        let mut stmt = loop {
+            match conn.prepare(&stmt_sql) {
+                Ok(s) => break s,
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg.contains("incomplete input") {
+                        match segs.next() {
+                            Some(next) => {
+                                stmt_sql.push(';');
+                                stmt_sql.push_str(&next);
+                                continue;
+                            }
+                            None => fail!(format!("prepare stmt {}: {msg}", stmt_no + 1)),
+                        }
+                    }
+                    fail!(format!("prepare stmt {}: {msg}", stmt_no + 1));
+                }
+            }
+        };
         stmt_no += 1;
         let ncols = stmt.column_count();
         if ncols == 0 {
-            let n = stmt.execute([]).map_err(|e| format!("stmt {stmt_no}: {e}"))?;
+            let n = match stmt.execute([]) {
+                Ok(n) => n,
+                Err(e) => fail!(format!("stmt {stmt_no}: {e}")),
+            };
             out.push_str(&format!("ok — {n} rows affected\n"));
         } else {
             let headers: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
             out.push_str(&headers.join(" | "));
-            let mut rows = stmt.query([]).map_err(|e| format!("query: {e}"))?;
+            let mut rows = match stmt.query([]) {
+                Ok(r) => r,
+                Err(e) => fail!(format!("query stmt {stmt_no}: {e}")),
+            };
             let mut n = 0usize;
-            while let Some(row) = rows.next().map_err(|e| format!("row: {e}"))? {
+            while let Some(row) = match rows.next() {
+                Ok(r) => r,
+                Err(e) => fail!(format!("row stmt {stmt_no}: {e}")),
+            } {
                 if n >= cap { out.push_str(&format!("\n… ({cap}-row cap)")); break; }
                 let mut cells = Vec::with_capacity(ncols);
                 for i in 0..ncols {
-                    let v = row.get_ref(i).map_err(|e| e.to_string())?;
+                    let v = match row.get_ref(i) {
+                        Ok(v) => v,
+                        Err(e) => fail!(format!("row stmt {stmt_no}: {e}")),
+                    };
                     cells.push(match v {
                         rusqlite::types::ValueRef::Null => "".into(),
                         rusqlite::types::ValueRef::Integer(i) => i.to_string(),
@@ -117,11 +167,15 @@ fn db_query(args: &Value) -> Result<String, String> {
             out.push_str(&format!("\n({n} rows)\n"));
         }
     }
-    Ok(out.trim_end().to_string())
+    Ok(if out.trim().is_empty() {
+        "(no statements)".to_string()
+    } else {
+        out.trim_end().to_string()
+    })
 }
 
 fn db_tables(args: &Value) -> Result<String, String> {
-    let conn = open(args["path"].as_str().ok_or("path required")?)?;
+    let conn = open_read(args["path"].as_str().ok_or("path required")?)?;
     let mut stmt = conn.prepare(
         "SELECT name FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY name")
         .map_err(|e| e.to_string())?;
@@ -131,7 +185,7 @@ fn db_tables(args: &Value) -> Result<String, String> {
 }
 
 fn db_schema(args: &Value) -> Result<String, String> {
-    let conn = open(args["path"].as_str().ok_or("path required")?)?;
+    let conn = open_read(args["path"].as_str().ok_or("path required")?)?;
     let (sql, val) = if let Some(t) = args["table"].as_str() {
         ("SELECT sql FROM sqlite_master WHERE name = ?1", Some(t.to_string()))
     } else {
