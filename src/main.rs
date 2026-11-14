@@ -1,8 +1,8 @@
 //! db — SQLite tools: db_query, db_tables, db_schema.
 
-use std::io::{BufRead, Write};
 use rusqlite::Connection;
 use serde_json::{json, Value};
+use std::io::{BufRead, Write};
 
 const NAME: &str = "db";
 const MAX_ROWS: usize = 200;
@@ -25,6 +25,7 @@ fn manifest() -> Value {
                 "path": {"type": "string"}, "table": {"type": "string"}},
              "required": ["path"]}},
         ],
+        "description": "query SQLite files",
         "commands": ["/db"], "subcommands": ["db"],
         "command_descriptions": {"/db": "query SQLite files"},
     })
@@ -52,22 +53,33 @@ fn split_statements(sql: &str) -> Vec<String> {
                 }
             }
             '-' if chars.peek() == Some(&'-') => {
-                for c2 in chars.by_ref() { if c2 == '\n' { cur.push('\n'); break; } }
+                for c2 in chars.by_ref() {
+                    if c2 == '\n' {
+                        cur.push('\n');
+                        break;
+                    }
+                }
             }
             '/' if chars.peek() == Some(&'*') => {
                 let mut prev = ' ';
                 for c2 in chars.by_ref() {
-                    if prev == '*' && c2 == '/' { break; }
+                    if prev == '*' && c2 == '/' {
+                        break;
+                    }
                     prev = c2;
                 }
             }
             ';' => {
-                if !cur.trim().is_empty() { out.push(std::mem::take(&mut cur)); }
+                if !cur.trim().is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                }
             }
             _ => cur.push(c),
         }
     }
-    if !cur.trim().is_empty() { out.push(cur); }
+    if !cur.trim().is_empty() {
+        out.push(cur);
+    }
     out
 }
 
@@ -145,7 +157,10 @@ fn db_query(args: &Value) -> Result<String, String> {
                 Ok(r) => r,
                 Err(e) => fail!(format!("row stmt {stmt_no}: {e}")),
             } {
-                if n >= cap { out.push_str(&format!("\n… ({cap}-row cap)")); break; }
+                if n >= cap {
+                    out.push_str(&format!("\n… ({cap}-row cap)"));
+                    break;
+                }
                 let mut cells = Vec::with_capacity(ncols);
                 for i in 0..ncols {
                     let v = match row.get_ref(i) {
@@ -156,7 +171,9 @@ fn db_query(args: &Value) -> Result<String, String> {
                         rusqlite::types::ValueRef::Null => "".into(),
                         rusqlite::types::ValueRef::Integer(i) => i.to_string(),
                         rusqlite::types::ValueRef::Real(f) => f.to_string(),
-                        rusqlite::types::ValueRef::Text(t) => String::from_utf8_lossy(t).to_string(),
+                        rusqlite::types::ValueRef::Text(t) => {
+                            String::from_utf8_lossy(t).to_string()
+                        }
                         rusqlite::types::ValueRef::Blob(b) => format!("<{}B blob>", b.len()),
                     });
                 }
@@ -179,26 +196,49 @@ fn db_tables(args: &Value) -> Result<String, String> {
     let mut stmt = conn.prepare(
         "SELECT name FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY name")
         .map_err(|e| e.to_string())?;
-    let names: Vec<String> = stmt.query_map([], |r| r.get(0))
-        .map_err(|e| e.to_string())?.filter_map(Result::ok).collect();
-    Ok(if names.is_empty() { "(no tables)".into() } else { names.join("\n") })
+    let names: Vec<String> = stmt
+        .query_map([], |r| r.get(0))
+        .map_err(|e| e.to_string())?
+        .filter_map(Result::ok)
+        .collect();
+    Ok(if names.is_empty() {
+        "(no tables)".into()
+    } else {
+        names.join("\n")
+    })
 }
 
 fn db_schema(args: &Value) -> Result<String, String> {
     let conn = open_read(args["path"].as_str().ok_or("path required")?)?;
     let (sql, val) = if let Some(t) = args["table"].as_str() {
-        ("SELECT sql FROM sqlite_master WHERE name = ?1", Some(t.to_string()))
+        (
+            "SELECT sql FROM sqlite_master WHERE name = ?1",
+            Some(t.to_string()),
+        )
     } else {
-        ("SELECT sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY name", None)
+        (
+            "SELECT sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY name",
+            None,
+        )
     };
     let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
     let rows: Vec<String> = match val {
-        Some(t) => stmt.query_map([t], |r| r.get(0))
-            .map_err(|e| e.to_string())?.filter_map(Result::ok).collect(),
-        None => stmt.query_map([], |r| r.get(0))
-            .map_err(|e| e.to_string())?.filter_map(Result::ok).collect(),
+        Some(t) => stmt
+            .query_map([t], |r| r.get(0))
+            .map_err(|e| e.to_string())?
+            .filter_map(Result::ok)
+            .collect(),
+        None => stmt
+            .query_map([], |r| r.get(0))
+            .map_err(|e| e.to_string())?
+            .filter_map(Result::ok)
+            .collect(),
     };
-    Ok(if rows.is_empty() { "(no schema)".into() } else { rows.join(";\n\n") + ";" })
+    Ok(if rows.is_empty() {
+        "(no schema)".into()
+    } else {
+        rows.join(";\n\n") + ";"
+    })
 }
 
 fn tool(name: &str, args: &Value) -> Value {
@@ -219,7 +259,9 @@ fn sidecar() -> std::io::Result<()> {
     let mut out = std::io::stdout().lock();
     for line in stdin.lock().lines() {
         let line = line?;
-        let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
+        let Ok(v) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
         let method = v["method"].as_str().unwrap_or("");
         match v.get("id").cloned() {
             None if method == "plugin/shutdown" => return Ok(()),
@@ -228,15 +270,20 @@ fn sidecar() -> std::io::Result<()> {
                 let reply = if method == "plugin/manifest" {
                     json!({"id": id, "result": manifest()})
                 } else if method == "tool/call" {
-                    let mut r = tool(v["params"]["name"].as_str().unwrap_or(""), &v["params"]["args"]);
-                    r["id"] = id; r
+                    let mut r = tool(
+                        v["params"]["name"].as_str().unwrap_or(""),
+                        &v["params"]["args"],
+                    );
+                    r["id"] = id;
+                    r
                 } else if method == "command/run" {
                     json!({"id": id, "result": {"text": "db: db_query/db_tables/db_schema tools"}})
                 } else {
                     json!({"id": id, "error": {"code": -32601,
                         "message": format!("method not found: {method}")}})
                 };
-                writeln!(out, "{reply}")?; out.flush()?;
+                writeln!(out, "{reply}")?;
+                out.flush()?;
             }
         }
     }
@@ -246,11 +293,14 @@ fn sidecar() -> std::io::Result<()> {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let args: Vec<String> = match args.first().map(String::as_str) {
-        Some("db") => args[1..].to_vec(), _ => args,
+        Some("db") => args[1..].to_vec(),
+        _ => args,
     };
     match args.first().map(String::as_str) {
         Some("manifest") => println!("{}", manifest()),
-        Some("sidecar") => { let _ = sidecar(); }
+        Some("sidecar") => {
+            let _ = sidecar();
+        }
         Some("-h" | "--help" | "help") => {
             println!("db — SQLite tools (db_query, db_tables, db_schema)");
         }
@@ -260,9 +310,11 @@ fn main() {
                     println!("db — SQLite tools (db_query, db_tables, db_schema)");
                     return;
                 }
-                let _ = sidecar(); return;
+                let _ = sidecar();
+                return;
             }
-            eprintln!("unknown verb"); std::process::exit(1);
+            eprintln!("unknown verb");
+            std::process::exit(1);
         }
     }
 }
